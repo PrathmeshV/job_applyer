@@ -1,0 +1,9 @@
+streamlit
+pandas
+openpyxl
+python-docx
+PyPDF2
+requests
+dotenv
+groq
+beautifulsoup4
