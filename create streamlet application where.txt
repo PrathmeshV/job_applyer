@@ -17,3 +17,7 @@ we dont want company drop down we just want to apply on perticular date on that 
 
 application is not sending feedback that there is no company avalilable on that date as wrong date selected 
 
+here from_email is picked from resume and to_eamil is picked from excel sheet where requruter mail will be there and has to submit after pressing submit button on fron end
+after entring password there is no acknlegde ment is there and mail is not send 
+
+GROQ_API_KEY= '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'

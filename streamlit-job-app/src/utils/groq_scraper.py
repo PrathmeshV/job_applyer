@@ -3,7 +3,7 @@ import re
 import requests
 from bs4 import BeautifulSoup
 from openai import OpenAI
-GROQ_API_KEY= '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'
+#GROQ_API_KEY= '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'
 
 # --- LLM Client Setup ---
 client = OpenAI(
