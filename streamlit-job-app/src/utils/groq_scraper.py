@@ -1,23 +1,67 @@
-import os
 import re
+import pandas as pd
+from openai import OpenAI
 import requests
 from bs4 import BeautifulSoup
-from openai import OpenAI
-#GROQ_API_KEY= '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'
-
+import os
+import difflib
+groq_api_key ="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"
 # --- LLM Client Setup ---
 client = OpenAI(
-    api_key=GROQ_API_KEY,
+    api_key=groq_api_key,
     base_url="https://api.groq.com/openai/v1"
 )
+
+# Load recruiter Excel (adjust file path)
+EXCEL_FILE = "sample_job_details.xlsx"
+
+
+
+def _find_in_excel(hr_name: str = "", company_name: str = "") -> str | None:
+    try:
+        df = pd.read_excel(EXCEL_FILE)
+
+        # Ensure columns exist
+        if "Recruiter Email" not in df.columns:
+            return None
+
+        # Step 1: If company column exists, try matching company
+        if "Company" in df.columns and company_name:
+            match = df[df["Company"].astype(str).str.lower().str.contains(company_name.lower(), na=False)]
+            if not match.empty:
+                email = match["Recruiter Email"].values[0]
+                if pd.notna(email) and "@" in str(email):
+                    return str(email).strip()
+
+        # Step 2: If recruiter name column exists, try fuzzy match
+        if "Recruiter Name" in df.columns and hr_name:
+            names = df["Recruiter Name"].dropna().astype(str).str.lower().str.strip().tolist()
+            closest = difflib.get_close_matches(hr_name.lower().strip(), names, n=1, cutoff=0.6)
+
+            if closest:
+                row = df[df["Recruiter Name"].str.lower().str.strip() == closest[0]]
+                email = row["Recruiter Email"].values[0]
+                if pd.notna(email) and "@" in str(email):
+                    return str(email).strip()
+
+        # Step 3: If no match, just return the first valid email in Excel
+        for email in df["Recruiter Email"].dropna().astype(str).str.strip():
+            if re.match(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", email):
+                return email
+
+        return None
+    except Exception as e:
+        print(f"[Excel] Error: {e}")
+        return None
+
+
 
 def _infer_company_domain(company_name: str) -> str | None:
     """
     Use Groq API to guess the official domain of a company.
-    Example: 'Vedant Infra' -> 'vedantinfra.com'
     """
     try:
-        prompt = f"Find the most likely official domain name of the company '{company_name}'. Only return the domain, no extra text."
+        prompt = f"Find the most likely official domain name of the company '{company_name}'. Only return the domain."
         response = client.chat.completions.create(
             model="llama-3.1-70b-versatile",
             messages=[{"role": "user", "content": prompt}],
@@ -25,7 +69,6 @@ def _infer_company_domain(company_name: str) -> str | None:
             temperature=0.2
         )
         domain = response.choices[0].message.content.strip()
-        # Normalize domain
         domain = re.sub(r"^https?://", "", domain)
         domain = domain.split("/")[0]
         return domain
@@ -62,20 +105,18 @@ def _scrape_domain_fallback(company_name: str) -> str | None:
         return None
 
 
-def generate_hr_emails(hr_name: str, company_name: str) -> list[str]:
+def _generate_email_patterns(hr_name: str, company_name: str) -> list[str]:
     """
-    Generate possible HR email IDs using Groq domain inference with a web scrape fallback.
+    Generate possible HR email IDs using domain inference.
     """
     domain = _infer_company_domain(company_name) or _scrape_domain_fallback(company_name)
     if not domain:
         return []
 
-    # Split HR name
     parts = hr_name.lower().split()
     first = parts[0]
     last = parts[-1] if len(parts) > 1 else ""
 
-    # Generate common email patterns
     candidates = [
         f"{first}.{last}@{domain}",
         f"{first}@{domain}",
@@ -84,24 +125,37 @@ def generate_hr_emails(hr_name: str, company_name: str) -> list[str]:
         f"{first[0]}{last}@{domain}",
     ]
 
-    return list(set(candidates))  # unique
+    return list(set(candidates))
 
 
-# --- Exposed API for app.py ---
-def get_recruiter_emails(hr_name: str, company_name: str) -> list[str]:
-    """
-    Public function to be called from app.py
-    Returns list of candidate HR emails.
-    """
-    return generate_hr_emails(hr_name, company_name)
-
-
-def scrape_recruiter_email(job_description: str) -> str:
-    """
-    Extract recruiter email from job description text using regex.
-    If no email is found, return an empty string.
-    """
-    match = re.search(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", job_description)
+def scrape_recruiter_email(job_description: str) -> str | None:
+    match = re.search(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.(com|in|org|net|co|edu)", job_description)
     if match:
         return match.group(0)
-    return ""
+    return None
+
+
+
+def get_recruiter_email(hr_name: str, company_name: str, job_description: str) -> str | None:
+    """
+    Main function with priority:
+    1. Look inside Excel
+    2. Extract from job description
+    3. Generate email patterns
+    """
+    # Step 1: Check Excel
+    email = _find_in_excel(hr_name)
+    if email:
+        return email
+
+    # Step 2: Look in job description
+    email = scrape_recruiter_email(job_description)
+    if email:
+        return email
+
+    # Step 3: Generate possible patterns
+    candidates = _generate_email_patterns(hr_name, company_name)
+    if candidates:
+        return candidates[0]  # return first suggestion
+
+    return None

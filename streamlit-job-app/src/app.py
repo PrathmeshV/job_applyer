@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import os
+import re
+import difflib
 from datetime import datetime
 from components.calendar_dropdown import calendar_dropdown
 from utils.resume_editor import edit_resume
@@ -48,6 +50,39 @@ def send_email(to_email, subject, body, from_email, from_password, attachment_pa
 
     server.send_message(msg)
     server.quit()
+
+
+# -------------------------------
+# Recruiter Email Finder
+# -------------------------------
+def find_recruiter_email(job_details, hr_name="", company_name=""):
+    """
+    Priority:
+    1. Direct Recruiter Email column in Excel
+    2. Fuzzy match with Recruiter Name if available
+    3. Fallback to scrape/patterns
+    """
+    try:
+        # 1. Check recruiter_email or Recruiter Email column
+        if "recruiter_email" in job_details and pd.notna(job_details["recruiter_email"]):
+            return str(job_details["recruiter_email"]).strip()
+
+        if "Recruiter Email" in job_details and pd.notna(job_details["Recruiter Email"]):
+            return str(job_details["Recruiter Email"]).strip()
+
+        # 2. Fuzzy match Recruiter Name
+        if hr_name and "Recruiter Name" in job_details:
+            names = [str(job_details["Recruiter Name"]).lower().strip()]
+            closest = difflib.get_close_matches(hr_name.lower().strip(), names, n=1, cutoff=0.6)
+            if closest:
+                return str(job_details["Recruiter Email"]).strip()
+
+        # 3. Last resort → regex from job description
+        return scrape_recruiter_email(job_details.get("job_description", ""))
+
+    except Exception as e:
+        print(f"[RecruiterEmail] Error: {e}")
+        return None
 
 
 # -------------------------------
@@ -111,6 +146,7 @@ def main():
 
         success_count = 0
         fail_count = 0
+        debug_results = []  # to show emails per company in Streamlit
 
         # Process jobs
         for _, job_details in jobs_for_date.iterrows():
@@ -128,21 +164,29 @@ def main():
                 edited_resume_path = edited_resume_result
 
             # Recruiter info
-            recruiter_email = job_details.get("recruiter_email")
             recruiter_name = job_details.get("recruiter_name", "")
-            if not recruiter_email:
-                recruiter_email = scrape_recruiter_email(company_name)
+            recruiter_email = find_recruiter_email(job_details, recruiter_name, company_name)
+
+            # Fix common typos
+            if recruiter_email:
+                recruiter_email = recruiter_email.replace("@gamil.com", "@gmail.com")
+
+            debug_results.append({
+                "Company": company_name,
+                "Recruiter": recruiter_name,
+                "Resolved Email": recruiter_email or "❌ Not Found"
+            })
 
             # Skip if no email found
             if not recruiter_email or recruiter_email == "None":
                 st.error(f"No recruiter email found for {company_name}, skipping...")
                 fail_count += 1
                 continue
+
             # Generate email body
             email_content = generate_email(
                 job_details, edited_resume_path, recruiter_name, user_name, user_email
             )
-            # fix tuple return
             if isinstance(email_content, tuple):
                 email_content = email_content[0]
 
@@ -160,6 +204,10 @@ def main():
             except Exception as e:
                 st.error(f"❌ Failed to send email to {recruiter_email}: {e}")
                 fail_count += 1
+
+        # Show debug table
+        st.subheader("📊 Recruiter Email Resolution")
+        st.dataframe(pd.DataFrame(debug_results))
 
         # Final summary
         if success_count > 0:
